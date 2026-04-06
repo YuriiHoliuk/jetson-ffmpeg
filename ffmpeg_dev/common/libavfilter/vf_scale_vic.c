@@ -300,12 +300,17 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     int in_fd, out_fd, out_pitch;
     int ret;
 
-    /* Initialize VIC session on first frame */
+    /* Initialize VIC session on first frame.
+       Note: NvBufSurfTransformSetSessionParams sets the transform engine.
+       VIC is preferred but falls back to GPU if unavailable. */
     if (!ctx->session_initialized) {
         memset(&ctx->session, 0, sizeof(ctx->session));
         ctx->session.compute_mode = NvBufSurfTransformCompute_VIC;
         ctx->session.gpu_id = 0;
-        dl_NvBufSurfTransformSetSessionParams(&ctx->session);
+        ctx->session.cuda_stream = NULL;
+        ret = dl_NvBufSurfTransformSetSessionParams(&ctx->session);
+        if (ret < 0)
+            av_log(avctx, AV_LOG_WARNING, "VIC session init failed (ret=%d), transform may fail\n", ret);
         ctx->session_initialized = 1;
     }
 
@@ -332,7 +337,7 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     ret = dl_NvBufSurfaceCreate(&out_surf, 1, &create_params);
     if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "NvBufSurfaceCreate failed\n");
+        av_log(avctx, AV_LOG_ERROR, "NvBufSurfaceCreate failed (ret=%d)\n", ret);
         av_frame_free(&in);
         return AVERROR_EXTERNAL;
     }
@@ -344,7 +349,9 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     ret = dl_NvBufSurfTransform(in_surf, out_surf, &xform);
     if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "NvBufSurfTransform failed\n");
+        av_log(avctx, AV_LOG_ERROR, "NvBufSurfTransform failed (ret=%d, in=%dx%d, out=%dx%d)\n",
+               ret, in_surf->surfaceList[0].width, in_surf->surfaceList[0].height,
+               ctx->out_w, ctx->out_h);
         dl_NvBufSurfaceDestroy(out_surf);
         av_frame_free(&in);
         return AVERROR_EXTERNAL;
