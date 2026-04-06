@@ -711,6 +711,50 @@ int copyNvBufToFrame(nvmpictx* ctx, NVMPI_frameBuf *nvmpiBuf, nvFrame* frame)
     return 0;
 }
 
+/* Opaque ref for zero-copy frame release callback */
+typedef struct {
+	nvmpictx *ctx;
+	NVMPI_frameBuf *buf;
+} nvmpi_frame_ref;
+
+static void frame_release(void *opaque) {
+	nvmpi_frame_ref *ref = (nvmpi_frame_ref *)opaque;
+	ref->ctx->framePool->qEmptyBuf(ref->buf);
+	free(ref);
+}
+
+int nvmpi_decoder_get_frame_fd(nvmpictx* ctx, int *dmabuf_fd,
+	int *width, int *height, int *pitch, int64_t *timestamp,
+	nvmpi_frame_release_cb *release, void **opaque)
+{
+	NVMPI_frameBuf *fb = ctx->framePool->dqFilledBuf();
+	if (!fb) return -1;
+
+	*dmabuf_fd = fb->dst_dma_fd;
+	*width = ctx->output_width;
+	*height = ctx->output_height;
+
+	/* Get pitch from the buffer surface params */
+#ifdef WITH_NVUTILS
+	*pitch = fb->dst_dma_surface->surfaceList[0].planeParams.pitch[0];
+#else
+	NvBufferParams parm;
+	NvBufferGetParams(fb->dst_dma_fd, &parm);
+	*pitch = parm.pitch[0];
+#endif
+
+	*timestamp = (int64_t)fb->timestamp;
+
+	/* Package ctx+buf so release callback can return buffer to pool */
+	nvmpi_frame_ref *ref = (nvmpi_frame_ref *)malloc(sizeof(nvmpi_frame_ref));
+	ref->ctx = ctx;
+	ref->buf = fb;
+	*opaque = ref;
+	*release = frame_release;
+
+	return 0;
+}
+
 int nvmpi_decoder_get_frame(nvmpictx* ctx,nvFrame* frame,bool wait)
 {
 	int ret;

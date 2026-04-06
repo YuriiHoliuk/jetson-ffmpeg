@@ -79,6 +79,10 @@ typedef struct _NVFRAME{
 	time_t timestamp;
 }nvFrame;
 
+/* Release callback for DMA-BUF frame references.
+   Called by the consumer (e.g. FFmpeg) when done with the frame buffer. */
+typedef void (*nvmpi_frame_release_cb)(void *opaque);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -88,6 +92,13 @@ extern "C" {
 	int nvmpi_decoder_put_packet(nvmpictx* ctx, nvPacket* packet);
 
 	int nvmpi_decoder_get_frame(nvmpictx* ctx, nvFrame* frame,bool wait);
+
+	/* Zero-copy decoder output: returns the DMA-BUF fd of the decoded frame
+	   instead of copying pixels to CPU memory. Caller must invoke the release
+	   callback (passing opaque) when done with the buffer. */
+	int nvmpi_decoder_get_frame_fd(nvmpictx* ctx, int *dmabuf_fd,
+		int *width, int *height, int *pitch, int64_t *timestamp,
+		nvmpi_frame_release_cb *release, void **opaque);
 
 	int nvmpi_decoder_close(nvmpictx* ctx);
 
