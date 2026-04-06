@@ -115,6 +115,7 @@ static pf_NvBufSurfTransform         dl_NvBufSurfTransform;
 static pf_NvBufSurfTransformSetSessionParams dl_NvBufSurfTransformSetSessionParams;
 
 static void *nvbufsurface_lib;
+static void *nvbufsurftransform_lib;
 
 static int load_nvbufsurface(void *log_ctx)
 {
@@ -128,21 +129,32 @@ static int load_nvbufsurface(void *log_ctx)
         return AVERROR_EXTERNAL;
     }
 
-#define LOAD(name) do { \
-    dl_##name = (pf_##name)dlsym(nvbufsurface_lib, #name); \
+    nvbufsurftransform_lib = dlopen("libnvbufsurftransform.so", RTLD_LAZY);
+    if (!nvbufsurftransform_lib) {
+        av_log(log_ctx, AV_LOG_ERROR, "Failed to load libnvbufsurftransform.so: %s\n",
+               dlerror());
+        dlclose(nvbufsurface_lib);
+        nvbufsurface_lib = NULL;
+        return AVERROR_EXTERNAL;
+    }
+
+#define LOAD(lib, name) do { \
+    dl_##name = (pf_##name)dlsym(lib, #name); \
     if (!dl_##name) { \
         av_log(log_ctx, AV_LOG_ERROR, "Missing symbol: %s\n", #name); \
         dlclose(nvbufsurface_lib); \
+        dlclose(nvbufsurftransform_lib); \
         nvbufsurface_lib = NULL; \
+        nvbufsurftransform_lib = NULL; \
         return AVERROR_EXTERNAL; \
     } \
 } while (0)
 
-    LOAD(NvBufSurfaceCreate);
-    LOAD(NvBufSurfaceDestroy);
-    LOAD(NvBufSurfaceFromFd);
-    LOAD(NvBufSurfTransform);
-    LOAD(NvBufSurfTransformSetSessionParams);
+    LOAD(nvbufsurface_lib, NvBufSurfaceCreate);
+    LOAD(nvbufsurface_lib, NvBufSurfaceDestroy);
+    LOAD(nvbufsurface_lib, NvBufSurfaceFromFd);
+    LOAD(nvbufsurftransform_lib, NvBufSurfTransform);
+    LOAD(nvbufsurftransform_lib, NvBufSurfTransformSetSessionParams);
 
 #undef LOAD
     return 0;
