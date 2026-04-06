@@ -47,6 +47,7 @@ typedef struct {
 	int rc;
 	int preset;
 	int encoder_flushing;
+	int dmabuf_input; /* 1 = accept DRM_PRIME/DMA-BUF frames */
 	AVFrame *frame; //tmp frame
 }nvmpiEncodeContext;
 
@@ -154,10 +155,9 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 		return AVERROR_EXTERNAL;
 	}
 
-	/* Detect DRM_PRIME but don't set on param yet —
-	   the GLOBAL_HEADER extradata extraction creates a temporary
-	   encoder that needs CPU (MMAP) mode */
-	if (avctx->pix_fmt == AV_PIX_FMT_DRM_PRIME)
+	/* Detect DRM_PRIME input mode — either via explicit option or
+	   from pix_fmt negotiation */
+	if (nvmpi_context->dmabuf_input || avctx->pix_fmt == AV_PIX_FMT_DRM_PRIME)
 		want_dmabuf = 1;
 
 	param.width=avctx->width;
@@ -564,6 +564,7 @@ static const AVOption options[] = {
 	{ "cbr",          "Constant bitrate mode",              0,                    AV_OPT_TYPE_CONST, { .i64 = 0 },                       0, 0, VE, "rc" },
 	{ "vbr",          "Variable bitrate mode",              0,                    AV_OPT_TYPE_CONST, { .i64 = 1 },                       0, 0, VE, "rc" },
 
+	{ "dmabuf_input", "Accept DRM_PRIME/DMA-BUF frames for zero-copy encode", OFFSET(dmabuf_input), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VE },
 	{ "preset",          "Set the encoding preset",            OFFSET(preset),       AV_OPT_TYPE_INT,   { .i64 = 3 }, 1, 4, VE, "preset" },
 	{ "default",         "",                                   0,                    AV_OPT_TYPE_CONST, { .i64 = 3 }, 0, 0, VE, "preset" },
 	{ "slow",            "",                        0,                    AV_OPT_TYPE_CONST, { .i64 = 4 },            0, 0, VE, "preset" },
