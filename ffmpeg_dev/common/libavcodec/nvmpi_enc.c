@@ -146,6 +146,7 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 	nvmpiEncodeContext * nvmpi_context = avctx->priv_data;
 
 	nvEncParam param={0};
+	int want_dmabuf = 0;
 
 	if (nvmpi_dynlink_load() < 0) {
 		av_log(avctx, AV_LOG_ERROR, "Failed to load libnvmpi.so: %s\n",
@@ -153,9 +154,11 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 		return AVERROR_EXTERNAL;
 	}
 
-	/* Enable DMA-BUF input when receiving DRM_PRIME frames */
+	/* Detect DRM_PRIME but don't set on param yet —
+	   the GLOBAL_HEADER extradata extraction creates a temporary
+	   encoder that needs CPU (MMAP) mode */
 	if (avctx->pix_fmt == AV_PIX_FMT_DRM_PRIME)
-		param.use_dmabuf = 1;
+		want_dmabuf = 1;
 
 	param.width=avctx->width;
 	param.height=avctx->height;
@@ -299,6 +302,9 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 		nvmpi_encoder_close(nvmpi_context->ctx);
 		nvmpi_context->ctx = NULL;
 	}
+
+	/* Now set use_dmabuf for the real encoder (not the temp one above) */
+	param.use_dmabuf = want_dmabuf;
 
 	if(avctx->codec->id == AV_CODEC_ID_H264)
 	{
