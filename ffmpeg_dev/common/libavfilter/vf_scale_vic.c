@@ -8,6 +8,7 @@
  */
 
 #include <dlfcn.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "libavutil/avstring.h"
@@ -36,13 +37,13 @@ typedef struct _NvBufSurfacePlaneParams {
 } NvBufSurfacePlaneParams;
 
 typedef struct _NvBufSurfaceParams {
-    unsigned int width;
-    unsigned int height;
-    unsigned int pitch;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
     int colorFormat;
     int layout;
-    int bufferDesc;          /* DMA-BUF fd */
-    unsigned int dataSize;
+    uint64_t bufferDesc;     /* DMA-BUF fd */
+    uint32_t dataSize;
     void *dataPtr;
     NvBufSurfacePlaneParams planeParams;
     /* ... more fields we don't need */
@@ -367,7 +368,7 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     /* Wrap output in AVDRMFrameDescriptor */
-    out_fd    = out_surf->surfaceList[0].bufferDesc;
+    out_fd    = (int)out_surf->surfaceList[0].bufferDesc;
     out_pitch = out_surf->surfaceList[0].planeParams.pitch[0];
 
     out_desc = av_mallocz(sizeof(*out_desc));
