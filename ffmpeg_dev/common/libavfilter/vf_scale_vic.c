@@ -265,7 +265,7 @@ static int scale_vic_config_output(AVFilterLink *outlink)
     ret = av_hwframe_ctx_init(ctx->frames_ref);
     if (ret < 0) return ret;
 
-    outlink->hw_frames_ctx = av_buffer_ref(ctx->frames_ref);
+    ff_filter_link(outlink)->hw_frames_ctx = av_buffer_ref(ctx->frames_ref);
 
     av_log(avctx, AV_LOG_VERBOSE, "scale_vic: %dx%d -> %dx%d\n",
            inlink->w, inlink->h, ctx->out_w, ctx->out_h);
