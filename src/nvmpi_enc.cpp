@@ -670,7 +670,7 @@ int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
 	int ret;
 	struct v4l2_buffer v4l2_buf;
 	struct v4l2_plane planes[MAX_PLANES];
-	NvBuffer *nvBuffer;
+	NvBuffer *nvBuffer = NULL;
 
 	memset(&v4l2_buf, 0, sizeof(v4l2_buf));
 	memset(planes, 0, sizeof(planes));
@@ -685,7 +685,6 @@ int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
 	if (ctx->index < ctx->enc->output_plane.getNumBuffers())
 	{
 		v4l2_buf.index = ctx->index;
-		nvBuffer = ctx->enc->output_plane.getNthBuffer(ctx->index);
 		ctx->index++;
 	}
 	else
@@ -715,23 +714,16 @@ int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
 		v4l2_buf.timestamp.tv_usec = timestamp % 1000000;
 		v4l2_buf.timestamp.tv_sec = timestamp / 1000000;
 
-		/* Sync buffer for device (GPU) access */
+		/* Sync buffer for device access — the decoder's NvBufSurfTransform
+		   already wrote to this buffer via VIC, but we need to ensure
+		   the encoder's V4L2 DMA engine sees the latest data */
 #ifdef WITH_NVUTILS
 		NvBufSurface *nvbuf_surf = NULL;
 		ret = NvBufSurfaceFromFd(dmabuf_fd, (void**)(&nvbuf_surf));
-		if (ret == 0)
+		if (ret == 0 && nvbuf_surf)
 		{
-			for (uint32_t j = 0; j < 2; j++)
-				NvBufSurfaceSyncForDevice(nvbuf_surf, 0, j);
-		}
-#else
-		/* For non-nvutils path, sync via NvBufferMemSyncForDevice */
-		for (uint32_t j = 0; j < 2; j++)
-		{
-			void *data = NULL;
-			NvBufferMemMap(dmabuf_fd, j, NvBufferMem_Read, &data);
-			NvBufferMemSyncForDevice(dmabuf_fd, j, &data);
-			NvBufferMemUnMap(dmabuf_fd, j, &data);
+			NvBufSurfaceSyncForDevice(nvbuf_surf, 0, 0);
+			NvBufSurfaceSyncForDevice(nvbuf_surf, 0, 1);
 		}
 #endif
 	}
