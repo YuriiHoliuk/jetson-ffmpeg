@@ -714,18 +714,10 @@ int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
 		v4l2_buf.timestamp.tv_usec = timestamp % 1000000;
 		v4l2_buf.timestamp.tv_sec = timestamp / 1000000;
 
-		/* Sync buffer for device access — the decoder's NvBufSurfTransform
-		   already wrote to this buffer via VIC, but we need to ensure
-		   the encoder's V4L2 DMA engine sees the latest data */
-#ifdef WITH_NVUTILS
-		NvBufSurface *nvbuf_surf = NULL;
-		ret = NvBufSurfaceFromFd(dmabuf_fd, (void**)(&nvbuf_surf));
-		if (ret == 0 && nvbuf_surf)
-		{
-			NvBufSurfaceSyncForDevice(nvbuf_surf, 0, 0);
-			NvBufSurfaceSyncForDevice(nvbuf_surf, 0, 1);
-		}
-#endif
+		/* Note: No explicit SyncForDevice needed here. The decoder's
+		   NvBufSurfTransform (VIC) already wrote to this buffer in GPU
+		   memory, and the V4L2 encoder reads it directly via DMABUF.
+		   The VIC → encoder path is entirely in device memory. */
 	}
 	else
 	{
