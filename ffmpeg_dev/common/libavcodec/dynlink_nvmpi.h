@@ -64,6 +64,7 @@ typedef struct _NVENCPARAM {
     unsigned int hw_preset_type;
     unsigned int vbv_buffer_size;
     nvCodingType codingType;
+    int use_dmabuf;
 } nvEncParam;
 
 typedef struct _NVDECPARAM {
@@ -92,14 +93,22 @@ typedef struct _NVFRAME {
     time_t timestamp;
 } nvFrame;
 
+/* ---- Release callback for DMA-BUF frame references ---- */
+typedef void (*nvmpi_frame_release_cb)(void *opaque);
+
 /* ---- Function pointer types ---- */
 
 typedef nvmpictx *(*pf_nvmpi_create_decoder)(nvDecParam *param);
 typedef int       (*pf_nvmpi_decoder_put_packet)(nvmpictx *ctx, nvPacket *packet);
 typedef int       (*pf_nvmpi_decoder_get_frame)(nvmpictx *ctx, nvFrame *frame, bool wait);
+typedef int       (*pf_nvmpi_decoder_get_frame_fd)(nvmpictx *ctx, int *dmabuf_fd,
+                    int *width, int *height, int *pitch, int64_t *timestamp,
+                    nvmpi_frame_release_cb *release, void **opaque);
 typedef int       (*pf_nvmpi_decoder_close)(nvmpictx *ctx);
 typedef nvmpictx *(*pf_nvmpi_create_encoder)(nvEncParam *param);
 typedef int       (*pf_nvmpi_encoder_put_frame)(nvmpictx *ctx, nvFrame *frame);
+typedef int       (*pf_nvmpi_encoder_put_frame_fd)(nvmpictx *ctx, int dmabuf_fd,
+                    int width, int height, int pitch, int64_t timestamp);
 typedef int       (*pf_nvmpi_encoder_get_packet)(nvmpictx *ctx, nvPacket **packet);
 typedef int       (*pf_nvmpi_encoder_dqEmptyPacket)(nvmpictx *ctx, nvPacket **packet);
 typedef void      (*pf_nvmpi_encoder_qEmptyPacket)(nvmpictx *ctx, nvPacket *packet);
@@ -107,16 +116,18 @@ typedef int       (*pf_nvmpi_encoder_close)(nvmpictx *ctx);
 
 /* ---- Global function pointers ---- */
 
-static pf_nvmpi_create_decoder     nvmpi_create_decoder;
-static pf_nvmpi_decoder_put_packet nvmpi_decoder_put_packet;
-static pf_nvmpi_decoder_get_frame  nvmpi_decoder_get_frame;
-static pf_nvmpi_decoder_close      nvmpi_decoder_close;
-static pf_nvmpi_create_encoder     nvmpi_create_encoder;
-static pf_nvmpi_encoder_put_frame  nvmpi_encoder_put_frame;
-static pf_nvmpi_encoder_get_packet nvmpi_encoder_get_packet;
+static pf_nvmpi_create_decoder        nvmpi_create_decoder;
+static pf_nvmpi_decoder_put_packet    nvmpi_decoder_put_packet;
+static pf_nvmpi_decoder_get_frame     nvmpi_decoder_get_frame;
+static pf_nvmpi_decoder_get_frame_fd  nvmpi_decoder_get_frame_fd;
+static pf_nvmpi_decoder_close         nvmpi_decoder_close;
+static pf_nvmpi_create_encoder        nvmpi_create_encoder;
+static pf_nvmpi_encoder_put_frame     nvmpi_encoder_put_frame;
+static pf_nvmpi_encoder_put_frame_fd  nvmpi_encoder_put_frame_fd;
+static pf_nvmpi_encoder_get_packet    nvmpi_encoder_get_packet;
 static pf_nvmpi_encoder_dqEmptyPacket nvmpi_encoder_dqEmptyPacket;
 static pf_nvmpi_encoder_qEmptyPacket  nvmpi_encoder_qEmptyPacket;
-static pf_nvmpi_encoder_close     nvmpi_encoder_close;
+static pf_nvmpi_encoder_close         nvmpi_encoder_close;
 
 static void *nvmpi_lib_handle;
 
@@ -145,9 +156,11 @@ static int nvmpi_dynlink_load(void)
     LOAD_SYM(create_decoder);
     LOAD_SYM(decoder_put_packet);
     LOAD_SYM(decoder_get_frame);
+    LOAD_SYM(decoder_get_frame_fd);
     LOAD_SYM(decoder_close);
     LOAD_SYM(create_encoder);
     LOAD_SYM(encoder_put_frame);
+    LOAD_SYM(encoder_put_frame_fd);
     LOAD_SYM(encoder_get_packet);
     LOAD_SYM(encoder_dqEmptyPacket);
     LOAD_SYM(encoder_qEmptyPacket);

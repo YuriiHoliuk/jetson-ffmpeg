@@ -5,6 +5,8 @@
 #include "libavutil/avstring.h"
 #include "libavutil/avutil.h"
 #include "libavutil/common.h"
+#include "libavutil/hwcontext.h"
+#include "libavutil/hwcontext_drm.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
@@ -150,6 +152,10 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 	}
 
 	nvEncParam param={0};
+
+	/* Enable DMA-BUF input when receiving DRM_PRIME frames */
+	if (avctx->pix_fmt == AV_PIX_FMT_DRM_PRIME)
+		param.use_dmabuf = 1;
 
 	param.width=avctx->width;
 	param.height=avctx->height;
@@ -318,7 +324,6 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 static int ff_nvmpi_send_frame(AVCodecContext *avctx,const AVFrame *frame)
 {
 	nvmpiEncodeContext * nvmpi_context = avctx->priv_data;
-	nvFrame _nvframe={0};
 	int res;
 
 	if (nvmpi_context->encoder_flushing)
@@ -326,26 +331,41 @@ static int ff_nvmpi_send_frame(AVCodecContext *avctx,const AVFrame *frame)
 
 	if(frame)
 	{
-		_nvframe.payload[0]=frame->data[0];
-		_nvframe.payload[1]=frame->data[1];
-		_nvframe.payload[2]=frame->data[2];
+		if (frame->format == AV_PIX_FMT_DRM_PRIME) {
+			/* DRM_PRIME path: extract DMA-BUF fd, pass directly to encoder */
+			AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)frame->data[0];
+			int fd = desc->objects[0].fd;
+			int pitch = desc->layers[0].planes[0].pitch;
+			int64_t timestamp = av_rescale_q(frame->pts, avctx->time_base, NVENC_TIMEBASE);
 
-		_nvframe.payload_size[0]=frame->linesize[0]*frame->height;
-		_nvframe.payload_size[1]=frame->linesize[1]*frame->height/2;
-		_nvframe.payload_size[2]=frame->linesize[2]*frame->height/2;
+			res = nvmpi_encoder_put_frame_fd(nvmpi_context->ctx, fd,
+			                                  frame->width, frame->height,
+			                                  pitch, timestamp);
+			if (res < 0)
+				return res;
+		} else {
+			/* CPU path: existing memcpy-based encode */
+			nvFrame _nvframe={0};
 
-		_nvframe.linesize[0]=frame->linesize[0];
-		_nvframe.linesize[1]=frame->linesize[1];
-		_nvframe.linesize[2]=frame->linesize[2];
+			_nvframe.payload[0]=frame->data[0];
+			_nvframe.payload[1]=frame->data[1];
+			_nvframe.payload[2]=frame->data[2];
 
-		//_nvframe.timestamp=frame->pts;
-		_nvframe.timestamp=av_rescale_q(frame->pts, avctx->time_base, NVENC_TIMEBASE);
-		//_nvframe.timestamp=frame->pts*avctx->time_base.num*1000*1000/avctx->time_base.den;
+			_nvframe.payload_size[0]=frame->linesize[0]*frame->height;
+			_nvframe.payload_size[1]=frame->linesize[1]*frame->height/2;
+			_nvframe.payload_size[2]=frame->linesize[2]*frame->height/2;
 
-		res=nvmpi_encoder_put_frame(nvmpi_context->ctx,&_nvframe);
+			_nvframe.linesize[0]=frame->linesize[0];
+			_nvframe.linesize[1]=frame->linesize[1];
+			_nvframe.linesize[2]=frame->linesize[2];
 
-		if(res<0)
-			return res;
+			_nvframe.timestamp=av_rescale_q(frame->pts, avctx->time_base, NVENC_TIMEBASE);
+
+			res=nvmpi_encoder_put_frame(nvmpi_context->ctx,&_nvframe);
+
+			if(res<0)
+				return res;
+		}
 	}
 	else
 	{
@@ -570,7 +590,7 @@ static const AVOption options[] = {
 			.init           = nvmpi_encode_init, \
 			FF_CODEC_RECEIVE_PACKET_CB(ff_nvmpi_receive_packet_async), \
 			.close          = nvmpi_encode_close, \
-			.p.pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },\
+			.p.pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },\
 			.p.capabilities   = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY, \
 			.defaults       = defaults,\
 			.p.wrapper_name   = "nvmpi", \
@@ -597,7 +617,7 @@ static const AVOption options[] = {
 			.init           = nvmpi_encode_init, \
 			NVMPI_ENC_API_CALLS, \
 			.close          = nvmpi_encode_close, \
-			.pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },\
+			.pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE },\
 			.capabilities   = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY, \
 			.defaults       = defaults,\
 			.wrapper_name   = "nvmpi", \
