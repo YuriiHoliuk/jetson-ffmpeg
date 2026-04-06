@@ -50,6 +50,7 @@ typedef struct _NVENCPARAM{
 	unsigned int hw_preset_type;
 	unsigned int vbv_buffer_size; //virtual buffer size of the encoder
 	nvCodingType codingType;
+	int use_dmabuf; /* Set to 1 to accept external DMA-BUF fds via put_frame_fd */
 } nvEncParam;
 
 typedef struct _NVDECPARAM{
@@ -105,6 +106,11 @@ extern "C" {
 	nvmpictx* nvmpi_create_encoder(nvEncParam* param);
 	//add frame to encoder
 	int nvmpi_encoder_put_frame(nvmpictx* ctx, nvFrame* frame);
+	/* Zero-copy encoder input: accepts a DMA-BUF fd (NV12 PitchLinear)
+	   directly instead of copying pixel data. Encoder must be created
+	   with use_dmabuf=1 in nvEncParam. */
+	int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
+		int width, int height, int pitch, int64_t timestamp);
 	//get filled packet from encoder
 	int nvmpi_encoder_get_packet(nvmpictx* ctx, nvPacket** packet);
 	//get empty packet with allocated buffer from encoder packet pool

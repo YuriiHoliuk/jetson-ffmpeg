@@ -50,6 +50,7 @@ struct nvmpictx
 	bool blocking_mode;
 	bool capPlaneGotEOS;
 	bool flushing;
+	bool dmabuf_external; // accept external DMA-BUF fds (zero-copy)
 
 	enum v4l2_mpeg_video_bitrate_mode ratecontrol;
 	enum v4l2_mpeg_video_h264_level level;
@@ -192,6 +193,18 @@ static int setup_output_dmabuf(nvmpictx *ctx, uint32_t num_buffers )
 }
 #endif
 
+/* Setup output plane for external DMA-BUF mode: reqbufs only, no allocation.
+   The caller provides fds at queue time via nvmpi_encoder_put_frame_fd(). */
+static int setup_output_dmabuf_external(nvmpictx *ctx, uint32_t num_buffers)
+{
+    int ret = ctx->enc->output_plane.reqbufs(V4L2_MEMORY_DMABUF, num_buffers);
+    if (ret) {
+        cerr << "reqbufs failed for output plane V4L2_MEMORY_DMABUF (external)" << endl;
+        return ret;
+    }
+    return 0;
+}
+
 nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 {
 	int ret;
@@ -211,6 +224,7 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 	ctx->pktPool = new NVMPI_bufPool<nvPacket*>();
 	ctx->enable_extended_colorformat=false;
 	ctx->packets_num=param->capture_num;
+	ctx->dmabuf_external = (param->use_dmabuf != 0);
 #if (OUTPLANE_MEMTYPE == OUTPLANE_MEMTYPE_DMA)
 	ctx->output_plane_fd = new int[ctx->packets_num];
 #endif
@@ -350,7 +364,14 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 			ctx->raw_pixfmt = V4L2_PIX_FMT_YUV420M;
 	}
 
-	if (ctx->enableLossless && param->codingType == NV_VIDEO_CodingH264)
+	if (ctx->dmabuf_external)
+	{
+		/* External DMA-BUF mode: decoder outputs NV12 (semi-planar),
+		   so use NV12M format for the encoder input */
+		ctx->raw_pixfmt = V4L2_PIX_FMT_NV12M;
+		ret = ctx->enc->setOutputPlaneFormat(V4L2_PIX_FMT_NV12M, ctx->width, ctx->height);
+	}
+	else if (ctx->enableLossless && param->codingType == NV_VIDEO_CodingH264)
 	{
 		ctx->profile = V4L2_MPEG_VIDEO_H264_PROFILE_HIGH_444_PREDICTIVE;
 		ret = ctx->enc->setOutputPlaneFormat(V4L2_PIX_FMT_YUV444M, ctx->width,ctx->height);
@@ -451,10 +472,20 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 	TEST_ERROR(ret < 0, "Could not set framerate", ret);
 	
 	//ret = ctx->enc->output_plane.setupPlane(V4L2_MEMORY_USERPTR, ctx->packets_num, false, true);
+	if (ctx->dmabuf_external)
+	{
+		ret = setup_output_dmabuf_external(ctx, ctx->packets_num);
+	}
 #if (OUTPLANE_MEMTYPE == OUTPLANE_MEMTYPE_MMAP)
-	ret = ctx->enc->output_plane.setupPlane(V4L2_MEMORY_MMAP, ctx->packets_num, true, false);
+	else
+	{
+		ret = ctx->enc->output_plane.setupPlane(V4L2_MEMORY_MMAP, ctx->packets_num, true, false);
+	}
 #else
-	ret = setup_output_dmabuf(ctx,ctx->packets_num); //V4L2_MEMORY_DMABUF
+	else
+	{
+		ret = setup_output_dmabuf(ctx,ctx->packets_num); //V4L2_MEMORY_DMABUF
+	}
 #endif
 	TEST_ERROR(ret < 0, "Could not setup output plane", ret);
 
@@ -626,6 +657,94 @@ int nvmpi_encoder_put_frame(nvmpictx* ctx,nvFrame* frame)
 
 	ret = ctx->enc->output_plane.qBuffer(v4l2_buf, NULL);
 	TEST_ERROR(ret < 0, "Error while queueing buffer at output plane", ret);
+
+	return 0;
+}
+
+int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
+	int width, int height, int pitch, int64_t timestamp)
+{
+	if (ctx->flushing) return -2;
+	if (!ctx->dmabuf_external) return -3;
+
+	int ret;
+	struct v4l2_buffer v4l2_buf;
+	struct v4l2_plane planes[MAX_PLANES];
+	NvBuffer *nvBuffer;
+
+	memset(&v4l2_buf, 0, sizeof(v4l2_buf));
+	memset(planes, 0, sizeof(planes));
+
+	v4l2_buf.m.planes = planes;
+	v4l2_buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	v4l2_buf.memory = V4L2_MEMORY_DMABUF;
+
+	if (ctx->enc->isInError())
+		return -1;
+
+	if (ctx->index < ctx->enc->output_plane.getNumBuffers())
+	{
+		v4l2_buf.index = ctx->index;
+		nvBuffer = ctx->enc->output_plane.getNthBuffer(ctx->index);
+		ctx->index++;
+	}
+	else
+	{
+		ret = ctx->enc->output_plane.dqBuffer(v4l2_buf, &nvBuffer, NULL, -1);
+		if (ret < 0)
+		{
+			cout << "Error DQing buffer at output plane (dmabuf)" << endl;
+			return -1;
+		}
+	}
+
+	if (dmabuf_fd >= 0)
+	{
+		/* NV12M: 2 planes sharing the same DMA-BUF fd.
+		   Plane 0 (Y):  offset 0, size = pitch * height
+		   Plane 1 (UV): offset = pitch * height, size = pitch * height / 2 */
+		v4l2_buf.m.planes[0].m.fd = dmabuf_fd;
+		v4l2_buf.m.planes[0].bytesused = pitch * height;
+		v4l2_buf.m.planes[0].data_offset = 0;
+
+		v4l2_buf.m.planes[1].m.fd = dmabuf_fd;
+		v4l2_buf.m.planes[1].bytesused = pitch * height / 2;
+		v4l2_buf.m.planes[1].data_offset = 0;
+
+		v4l2_buf.flags |= V4L2_BUF_FLAG_TIMESTAMP_COPY;
+		v4l2_buf.timestamp.tv_usec = timestamp % 1000000;
+		v4l2_buf.timestamp.tv_sec = timestamp / 1000000;
+
+		/* Sync buffer for device (GPU) access */
+#ifdef WITH_NVUTILS
+		NvBufSurface *nvbuf_surf = NULL;
+		ret = NvBufSurfaceFromFd(dmabuf_fd, (void**)(&nvbuf_surf));
+		if (ret == 0)
+		{
+			for (uint32_t j = 0; j < 2; j++)
+				NvBufSurfaceSyncForDevice(nvbuf_surf, 0, j);
+		}
+#else
+		/* For non-nvutils path, sync via NvBufferMemSyncForDevice */
+		for (uint32_t j = 0; j < 2; j++)
+		{
+			void *data = NULL;
+			NvBufferMemMap(dmabuf_fd, j, NvBufferMem_Read, &data);
+			NvBufferMemSyncForDevice(dmabuf_fd, j, &data);
+			NvBufferMemUnMap(dmabuf_fd, j, &data);
+		}
+#endif
+	}
+	else
+	{
+		/* NULL/EOS: flush the encoder */
+		ctx->flushing = true;
+		v4l2_buf.m.planes[0].bytesused = 0;
+		v4l2_buf.m.planes[1].bytesused = 0;
+	}
+
+	ret = ctx->enc->output_plane.qBuffer(v4l2_buf, NULL);
+	TEST_ERROR(ret < 0, "Error while queueing buffer at output plane (dmabuf)", ret);
 
 	return 0;
 }
