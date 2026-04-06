@@ -418,10 +418,10 @@ static const AVFilterPad scale_vic_outputs[] = {
     },
 };
 
-const FFFilter ff_vf_scale_vic = {
-    .p.name         = "scale_vic",
-    .p.description  = NULL_IF_CONFIG_SMALL("Scale using NVIDIA Jetson VIC engine"),
-    .p.priv_class   = &scale_vic_class,
+const AVFilter ff_vf_scale_vic = {
+    .name           = "scale_vic",
+    .description    = NULL_IF_CONFIG_SMALL("Scale using NVIDIA Jetson VIC engine"),
+    .priv_class     = &scale_vic_class,
     .priv_size      = sizeof(ScaleVICContext),
     .init           = scale_vic_init,
     .uninit         = scale_vic_uninit,
