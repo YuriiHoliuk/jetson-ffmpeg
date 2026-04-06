@@ -22,7 +22,7 @@ int nvmpi_surface_alloc(unsigned int width, unsigned int height,
     params.colorFormat = (NvBufSurfaceColorFormat)color_format;
     params.layout      = (NvBufSurfaceLayout)layout;
     params.memType     = (NvBufSurfaceMemType)mem_type;
-    params.memtag      = NvBufSurfaceTag_VIDEO_CONVERT;
+    params.memtag      = NvBufSurfaceTag_VIDEO_ENC;
 
     int fd = -1;
     int ret = NvBufSurf::NvAllocate(&params, 1, &fd);
