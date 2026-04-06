@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 
-#include <nvmpi.h>
+#include "dynlink_nvmpi.h"
 #include "avcodec.h"
 #include "decode.h"
 #include "internal.h"
@@ -91,6 +91,12 @@ static int nvmpi_init_decoder(AVCodecContext *avctx)
 	{
 		avctx->width = param.resized.width;
 		avctx->height = param.resized.height;
+	}
+
+	if (nvmpi_dynlink_load() < 0) {
+		av_log(avctx, AV_LOG_ERROR, "Failed to load libnvmpi.so: %s\n",
+		       dlerror());
+		return AVERROR_EXTERNAL;
 	}
 
 	nvmpi_context->bufFrame = av_frame_alloc();

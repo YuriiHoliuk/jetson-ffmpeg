@@ -1,4 +1,4 @@
-#include <nvmpi.h>
+#include "dynlink_nvmpi.h"
 #include "avcodec.h"
 #include "internal.h"
 #include <stdio.h>
@@ -142,6 +142,12 @@ int nvmpienc_deinitPktPool(AVCodecContext *avctx)
 static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 {
 	nvmpiEncodeContext * nvmpi_context = avctx->priv_data;
+
+	if (nvmpi_dynlink_load() < 0) {
+		av_log(avctx, AV_LOG_ERROR, "Failed to load libnvmpi.so: %s\n",
+		       dlerror());
+		return AVERROR_EXTERNAL;
+	}
 
 	nvEncParam param={0};
 
