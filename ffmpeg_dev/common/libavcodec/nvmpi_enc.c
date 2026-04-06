@@ -145,13 +145,13 @@ static av_cold int nvmpi_encode_init(AVCodecContext *avctx)
 {
 	nvmpiEncodeContext * nvmpi_context = avctx->priv_data;
 
+	nvEncParam param={0};
+
 	if (nvmpi_dynlink_load() < 0) {
 		av_log(avctx, AV_LOG_ERROR, "Failed to load libnvmpi.so: %s\n",
 		       dlerror());
 		return AVERROR_EXTERNAL;
 	}
-
-	nvEncParam param={0};
 
 	/* Enable DMA-BUF input when receiving DRM_PRIME frames */
 	if (avctx->pix_fmt == AV_PIX_FMT_DRM_PRIME)

@@ -219,6 +219,8 @@ static int nvmpi_decode(AVCodecContext *avctx, void *data, int *got_frame, AVPac
 		int64_t timestamp;
 		nvmpi_frame_release_cb release;
 		void *opaque;
+		AVDRMFrameDescriptor *desc;
+		nvmpiDRMFrameRef *ref;
 
 		res = nvmpi_decoder_get_frame_fd(nvmpi_context->ctx, &fd, &w, &h,
 		                                  &pitch, &timestamp, &release, &opaque);
@@ -249,7 +251,7 @@ static int nvmpi_decode(AVCodecContext *avctx, void *data, int *got_frame, AVPac
 			avctx->height = h;
 		}
 
-		AVDRMFrameDescriptor *desc = av_mallocz(sizeof(*desc));
+		desc = av_mallocz(sizeof(*desc));
 		if (!desc) {
 			release(opaque);
 			return AVERROR(ENOMEM);
@@ -272,7 +274,7 @@ static int nvmpi_decode(AVCodecContext *avctx, void *data, int *got_frame, AVPac
 		desc->layers[0].planes[1].pitch        = pitch;
 
 		/* Wrap release callback so pool buffer is returned when AVFrame is freed */
-		nvmpiDRMFrameRef *ref = av_mallocz(sizeof(*ref));
+		ref = av_mallocz(sizeof(*ref));
 		if (!ref) {
 			av_free(desc);
 			release(opaque);
