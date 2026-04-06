@@ -120,6 +120,16 @@ extern "C" {
 	//close encoder
 	int nvmpi_encoder_close(nvmpictx* ctx);
 
+	/* Allocate a DMA-BUF surface with proper memtag for encoder compatibility.
+	   Uses NvBufSurf::NvAllocate with NvBufSurfaceTag_VIDEO_CONVERT.
+	   surf_out may be NULL if caller doesn't need the NvBufSurface pointer. */
+	int nvmpi_surface_alloc(unsigned int width, unsigned int height,
+		int color_format, int layout, int mem_type,
+		int *dmabuf_fd, void **surf_out);
+
+	/* Destroy a DMA-BUF surface allocated with nvmpi_surface_alloc. */
+	int nvmpi_surface_destroy(int dmabuf_fd);
+
 #ifdef __cplusplus
 }
 #endif

@@ -58,17 +58,6 @@ typedef struct _NvBufSurface {
     NvBufSurfaceParams *surfaceList;
 } NvBufSurface;
 
-typedef struct _NvBufSurfaceCreateParams {
-    int gpuId;
-    unsigned int width;
-    unsigned int height;
-    unsigned int size;
-    int isContiguous;
-    int colorFormat;
-    int layout;
-    int memType;
-} NvBufSurfaceCreateParams;
-
 typedef struct _NvBufSurfTransformRect {
     unsigned int top;
     unsigned int left;
@@ -100,23 +89,25 @@ typedef struct _NvBufSurfTransformConfigParams {
 
 /* ---- dlopen function pointers ---- */
 
-typedef int (*pf_NvBufSurfaceCreate)(NvBufSurface **surf, int batchSize,
-                                      NvBufSurfaceCreateParams *params);
-typedef int (*pf_NvBufSurfaceDestroy)(NvBufSurface *surf);
 typedef int (*pf_NvBufSurfaceFromFd)(int dmabuf_fd, void **buffer);
 typedef int (*pf_NvBufSurfTransform)(NvBufSurface *src, NvBufSurface *dst,
                                       NvBufSurfTransformParams *params);
 typedef int (*pf_NvBufSurfTransformSetSessionParams)(
                                       NvBufSurfTransformConfigParams *params);
+typedef int (*pf_nvmpi_surface_alloc)(unsigned int width, unsigned int height,
+                                      int color_format, int layout, int mem_type,
+                                      int *dmabuf_fd, void **surf_out);
+typedef int (*pf_nvmpi_surface_destroy)(int dmabuf_fd);
 
-static pf_NvBufSurfaceCreate         dl_NvBufSurfaceCreate;
-static pf_NvBufSurfaceDestroy        dl_NvBufSurfaceDestroy;
 static pf_NvBufSurfaceFromFd         dl_NvBufSurfaceFromFd;
 static pf_NvBufSurfTransform         dl_NvBufSurfTransform;
 static pf_NvBufSurfTransformSetSessionParams dl_NvBufSurfTransformSetSessionParams;
+static pf_nvmpi_surface_alloc        dl_nvmpi_surface_alloc;
+static pf_nvmpi_surface_destroy      dl_nvmpi_surface_destroy;
 
 static void *nvbufsurface_lib;
 static void *nvbufsurftransform_lib;
+static void *nvmpi_lib;
 
 static int load_nvbufsurface(void *log_ctx)
 {
@@ -139,23 +130,36 @@ static int load_nvbufsurface(void *log_ctx)
         return AVERROR_EXTERNAL;
     }
 
+    nvmpi_lib = dlopen("libnvmpi.so", RTLD_LAZY);
+    if (!nvmpi_lib) {
+        av_log(log_ctx, AV_LOG_ERROR, "Failed to load libnvmpi.so: %s\n",
+               dlerror());
+        dlclose(nvbufsurface_lib);
+        dlclose(nvbufsurftransform_lib);
+        nvbufsurface_lib = NULL;
+        nvbufsurftransform_lib = NULL;
+        return AVERROR_EXTERNAL;
+    }
+
 #define LOAD(lib, name) do { \
     dl_##name = (pf_##name)dlsym(lib, #name); \
     if (!dl_##name) { \
         av_log(log_ctx, AV_LOG_ERROR, "Missing symbol: %s\n", #name); \
         dlclose(nvbufsurface_lib); \
         dlclose(nvbufsurftransform_lib); \
+        dlclose(nvmpi_lib); \
         nvbufsurface_lib = NULL; \
         nvbufsurftransform_lib = NULL; \
+        nvmpi_lib = NULL; \
         return AVERROR_EXTERNAL; \
     } \
 } while (0)
 
-    LOAD(nvbufsurface_lib, NvBufSurfaceCreate);
-    LOAD(nvbufsurface_lib, NvBufSurfaceDestroy);
     LOAD(nvbufsurface_lib, NvBufSurfaceFromFd);
     LOAD(nvbufsurftransform_lib, NvBufSurfTransform);
     LOAD(nvbufsurftransform_lib, NvBufSurfTransformSetSessionParams);
+    LOAD(nvmpi_lib, nvmpi_surface_alloc);
+    LOAD(nvmpi_lib, nvmpi_surface_destroy);
 
 #undef LOAD
     return 0;
@@ -178,11 +182,17 @@ typedef struct ScaleVICContext {
 
 /* ---- Release callback for output frames ---- */
 
+typedef struct VICFrameRef {
+    int dmabuf_fd;
+} VICFrameRef;
+
 static void vic_frame_free(void *opaque, uint8_t *data)
 {
-    NvBufSurface *surf = (NvBufSurface *)opaque;
-    if (surf)
-        dl_NvBufSurfaceDestroy(surf);
+    VICFrameRef *ref = (VICFrameRef *)opaque;
+    if (ref) {
+        dl_nvmpi_surface_destroy(ref->dmabuf_fd);
+        av_free(ref);
+    }
     av_free(data);
 }
 
@@ -295,8 +305,8 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     AVDRMFrameDescriptor *out_desc;
     NvBufSurface *in_surf = NULL;
     NvBufSurface *out_surf = NULL;
-    NvBufSurfaceCreateParams create_params;
     NvBufSurfTransformParams xform;
+    VICFrameRef *frame_ref;
     AVFrame *out;
     int in_fd, out_fd, out_pitch;
     int ret;
@@ -327,19 +337,13 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
         return AVERROR_EXTERNAL;
     }
 
-    /* Allocate output NvBufSurface */
-    memset(&create_params, 0, sizeof(create_params));
-    create_params.gpuId        = 0;
-    create_params.width        = ctx->out_w;
-    create_params.height       = ctx->out_h;
-    create_params.colorFormat  = NVBUF_COLOR_FORMAT_NV12;
-    create_params.layout       = NVBUF_LAYOUT_PITCH;
-    create_params.memType      = NVBUF_MEM_SURFACE_ARRAY;
-    create_params.isContiguous = 1;
-
-    ret = dl_NvBufSurfaceCreate(&out_surf, 1, &create_params);
+    /* Allocate output NvBufSurface via nvmpi (encoder-compatible allocation) */
+    out_fd = -1;
+    ret = dl_nvmpi_surface_alloc(ctx->out_w, ctx->out_h,
+        NVBUF_COLOR_FORMAT_NV12, NVBUF_LAYOUT_PITCH, NVBUF_MEM_SURFACE_ARRAY,
+        &out_fd, (void **)&out_surf);
     if (ret < 0) {
-        av_log(avctx, AV_LOG_ERROR, "NvBufSurfaceCreate failed (ret=%d)\n", ret);
+        av_log(avctx, AV_LOG_ERROR, "nvmpi_surface_alloc failed (ret=%d)\n", ret);
         av_frame_free(&in);
         return AVERROR_EXTERNAL;
     }
@@ -362,18 +366,17 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
         av_log(avctx, AV_LOG_ERROR, "NvBufSurfTransform failed (ret=%d, in=%dx%d, out=%dx%d)\n",
                ret, in_surf->surfaceList[0].width, in_surf->surfaceList[0].height,
                ctx->out_w, ctx->out_h);
-        dl_NvBufSurfaceDestroy(out_surf);
+        dl_nvmpi_surface_destroy(out_fd);
         av_frame_free(&in);
         return AVERROR_EXTERNAL;
     }
 
     /* Wrap output in AVDRMFrameDescriptor */
-    out_fd    = (int)out_surf->surfaceList[0].bufferDesc;
     out_pitch = out_surf->surfaceList[0].planeParams.pitch[0];
 
     out_desc = av_mallocz(sizeof(*out_desc));
     if (!out_desc) {
-        dl_NvBufSurfaceDestroy(out_surf);
+        dl_nvmpi_surface_destroy(out_fd);
         av_frame_free(&in);
         return AVERROR(ENOMEM);
     }
@@ -393,13 +396,17 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     out_desc->layers[0].planes[1].pitch        = out_pitch;
 
     /* Build output AVFrame */
+    frame_ref = av_mallocz(sizeof(*frame_ref));
     out = av_frame_alloc();
-    if (!out) {
+    if (!out || !frame_ref) {
+        av_free(frame_ref);
         av_free(out_desc);
-        dl_NvBufSurfaceDestroy(out_surf);
+        dl_nvmpi_surface_destroy(out_fd);
         av_frame_free(&in);
+        av_frame_free(&out);
         return AVERROR(ENOMEM);
     }
+    frame_ref->dmabuf_fd = out_fd;
 
     out->data[0]       = (uint8_t *)out_desc;
     out->format        = AV_PIX_FMT_DRM_PRIME;
@@ -407,7 +414,7 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     out->height        = ctx->out_h;
     out->hw_frames_ctx = av_buffer_ref(ctx->frames_ref);
     out->buf[0]        = av_buffer_create((uint8_t *)out_desc, sizeof(*out_desc),
-                                          vic_frame_free, out_surf,
+                                          vic_frame_free, frame_ref,
                                           AV_BUFFER_FLAG_READONLY);
     out->pts           = in->pts;
     out->pkt_dts       = in->pkt_dts;
