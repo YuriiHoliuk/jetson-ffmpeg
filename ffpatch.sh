@@ -251,6 +251,34 @@ cp ffmpeg_dev/common/libavcodec/nvmpi_dec.c ${FF_DIR_LIBAVCODEC}"/nvmpi_dec.c"
 cp ffmpeg_dev/common/libavcodec/nvmpi_enc.c ${FF_DIR_LIBAVCODEC}"/nvmpi_enc.c"
 cp ffmpeg_dev/common/libavcodec/dynlink_nvmpi.h ${FF_DIR_LIBAVCODEC}"/dynlink_nvmpi.h"
 
+################## PATCH scale_vic filter into libavfilter ############################
+FF_DIR_LIBAVFILTER=${FF_DIR_ROOT}"/libavfilter"
+FF_FILE_LIBAVFILTER_MAKEFILE=${FF_DIR_LIBAVFILTER}"/Makefile"
+FF_FILE_LIBAVFILTER_ALLFILTERSC=${FF_DIR_LIBAVFILTER}"/allfilters.c"
+
+echo "Patching scale_vic filter..."
+
+# Add to libavfilter/Makefile (after scale_vaapi line)
+if ! grep -q 'CONFIG_SCALE_VIC_FILTER' "$FF_FILE_LIBAVFILTER_MAKEFILE"; then
+	sed -i '/OBJS-\$(CONFIG_SCALE_VAAPI_FILTER)/a OBJS-$(CONFIG_SCALE_VIC_FILTER)               += vf_scale_vic.o' "$FF_FILE_LIBAVFILTER_MAKEFILE"
+fi
+
+# Add to libavfilter/allfilters.c (after scale_vaapi line)
+if ! grep -q 'ff_vf_scale_vic' "$FF_FILE_LIBAVFILTER_ALLFILTERSC"; then
+	sed -i '/extern const FFFilter ff_vf_scale_vaapi;/a extern const FFFilter ff_vf_scale_vic;' "$FF_FILE_LIBAVFILTER_ALLFILTERSC"
+fi
+
+# Add filter dependency in configure (after scale_vaapi_filter_deps)
+if ! grep -q 'scale_vic_filter_deps' "$FF_FILE_CONFIGURE"; then
+	sed -i '/scale_vaapi_filter_deps/a scale_vic_filter_deps="nvmpi"' "$FF_FILE_CONFIGURE"
+fi
+
+# Copy filter source file
+cp ffmpeg_dev/common/libavfilter/vf_scale_vic.c ${FF_DIR_LIBAVFILTER}"/vf_scale_vic.c"
+
+echo "scale_vic filter patched!"
+################## END scale_vic ############################
+
 echo "Success!"
 
 rm -rf "$BKP_DIR" 2>&1 > /dev/null
