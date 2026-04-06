@@ -265,7 +265,7 @@ fi
 
 # Add to libavfilter/allfilters.c (after scale_vaapi line)
 if ! grep -q 'ff_vf_scale_vic' "$FF_FILE_LIBAVFILTER_ALLFILTERSC"; then
-	sed -i '/extern const FFFilter ff_vf_scale_vaapi;/a extern const FFFilter ff_vf_scale_vic;' "$FF_FILE_LIBAVFILTER_ALLFILTERSC"
+	sed -i '/extern const AVFilter ff_vf_scale_vaapi;/a extern const AVFilter ff_vf_scale_vic;' "$FF_FILE_LIBAVFILTER_ALLFILTERSC"
 fi
 
 # Add filter dependency in configure (after scale_vaapi_filter_deps)
