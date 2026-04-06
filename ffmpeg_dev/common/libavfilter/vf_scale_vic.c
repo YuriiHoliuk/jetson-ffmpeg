@@ -328,12 +328,13 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     /* Allocate output NvBufSurface */
     memset(&create_params, 0, sizeof(create_params));
-    create_params.gpuId       = 0;
-    create_params.width       = ctx->out_w;
-    create_params.height      = ctx->out_h;
-    create_params.colorFormat = NVBUF_COLOR_FORMAT_NV12;
-    create_params.layout      = NVBUF_LAYOUT_PITCH;
-    create_params.memType     = NVBUF_MEM_SURFACE_ARRAY;
+    create_params.gpuId        = 0;
+    create_params.width        = ctx->out_w;
+    create_params.height       = ctx->out_h;
+    create_params.colorFormat  = NVBUF_COLOR_FORMAT_NV12;
+    create_params.layout       = NVBUF_LAYOUT_PITCH;
+    create_params.memType      = NVBUF_MEM_SURFACE_ARRAY;
+    create_params.isContiguous = 1;
 
     ret = dl_NvBufSurfaceCreate(&out_surf, 1, &create_params);
     if (ret < 0) {
@@ -343,11 +344,19 @@ static int scale_vic_filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     /* VIC hardware scaling */
-    memset(&xform, 0, sizeof(xform));
-    xform.transform_flag   = NVBUFSURF_TRANSFORM_FILTER;
-    xform.transform_filter = NvBufSurfTransform_Inter_Bilinear;
+    {
+        NvBufSurfTransformRect src_rect = { 0, 0, in_surf->surfaceList[0].width,
+                                            in_surf->surfaceList[0].height };
+        NvBufSurfTransformRect dst_rect = { 0, 0, ctx->out_w, ctx->out_h };
 
-    ret = dl_NvBufSurfTransform(in_surf, out_surf, &xform);
+        memset(&xform, 0, sizeof(xform));
+        xform.transform_flag   = NVBUFSURF_TRANSFORM_FILTER;
+        xform.transform_filter = NvBufSurfTransform_Inter_Bilinear;
+        xform.src_rect         = &src_rect;
+        xform.dst_rect         = &dst_rect;
+
+        ret = dl_NvBufSurfTransform(in_surf, out_surf, &xform);
+    }
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR, "NvBufSurfTransform failed (ret=%d, in=%dx%d, out=%dx%d)\n",
                ret, in_surf->surfaceList[0].width, in_surf->surfaceList[0].height,
