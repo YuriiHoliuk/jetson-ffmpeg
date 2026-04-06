@@ -337,10 +337,13 @@ static int ff_nvmpi_send_frame(AVCodecContext *avctx,const AVFrame *frame)
 
 	if(frame)
 	{
+		av_log(avctx, AV_LOG_DEBUG, "nvmpi_send_frame: format=%d (DRM_PRIME=%d)\n",
+		       frame->format, AV_PIX_FMT_DRM_PRIME);
 		if (frame->format == AV_PIX_FMT_DRM_PRIME) {
 			/* DRM_PRIME path: extract DMA-BUF fd, pass directly to encoder */
 			AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)frame->data[0];
 			int fd = desc->objects[0].fd;
+			av_log(avctx, AV_LOG_DEBUG, "nvmpi_send_frame DRM_PRIME: fd=%d\n", fd);
 			int pitch = desc->layers[0].planes[0].pitch;
 			int64_t timestamp = av_rescale_q(frame->pts, avctx->time_base, NVENC_TIMEBASE);
 
@@ -376,7 +379,10 @@ static int ff_nvmpi_send_frame(AVCodecContext *avctx,const AVFrame *frame)
 	else
 	{
 		nvmpi_context->encoder_flushing = 1;
-		nvmpi_encoder_put_frame(nvmpi_context->ctx,NULL);
+		if (nvmpi_context->dmabuf_input)
+			nvmpi_encoder_put_frame_fd(nvmpi_context->ctx, -1, 0, 0, 0, 0);
+		else
+			nvmpi_encoder_put_frame(nvmpi_context->ctx,NULL);
 	}
 
 	return 0;
@@ -485,7 +491,10 @@ static av_cold int nvmpi_encode_close(AVCodecContext *avctx)
 		if(!nvmpi_context->encoder_flushing)
 		{
 			nvmpi_context->encoder_flushing = 1;
-			nvmpi_encoder_put_frame(nvmpi_context->ctx,NULL);
+			if (nvmpi_context->dmabuf_input)
+				nvmpi_encoder_put_frame_fd(nvmpi_context->ctx, -1, 0, 0, 0, 0);
+			else
+				nvmpi_encoder_put_frame(nvmpi_context->ctx,NULL);
 		}
 		
 		while(1)

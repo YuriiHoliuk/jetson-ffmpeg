@@ -472,11 +472,9 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 	TEST_ERROR(ret < 0, "Could not set framerate", ret);
 	
 	//ret = ctx->enc->output_plane.setupPlane(V4L2_MEMORY_USERPTR, ctx->packets_num, false, true);
-	fprintf(stderr, "[NVMPI] about to setup output plane, dmabuf_ext=%d, packets_num=%d\n", ctx->dmabuf_external, ctx->packets_num);
 	if (ctx->dmabuf_external)
 	{
 		ret = setup_output_dmabuf_external(ctx, ctx->packets_num);
-		fprintf(stderr, "[NVMPI] setup_output_dmabuf_external ret=%d\n", ret);
 	}
 #if (OUTPLANE_MEMTYPE == OUTPLANE_MEMTYPE_MMAP)
 	else
@@ -497,14 +495,12 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 	ret = ctx->enc->subscribeEvent(V4L2_EVENT_EOS,0,0);
 	TEST_ERROR(ret < 0, "Could not subscribe EOS event", ret);
 
-	fprintf(stderr, "[NVMPI] streamon output plane...\n");
 	ret = ctx->enc->output_plane.setStreamStatus(true);
 	TEST_ERROR(ret < 0, "Error in output plane streamon", ret);
-	fprintf(stderr, "[NVMPI] streamon capture plane...\n");
+
 	ret = ctx->enc->capture_plane.setStreamStatus(true);
 	TEST_ERROR(ret < 0, "Error in capture plane streamon", ret);
 
-	fprintf(stderr, "[NVMPI] starting DQ thread...\n");
 	if(ctx->blocking_mode)
 	{
 		ctx->enc->capture_plane.setDQThreadCallback(encoder_capture_plane_dq_callback);
@@ -537,8 +533,6 @@ nvmpictx* nvmpi_create_encoder(nvEncParam* param)
 
 	}
 
-	fprintf(stderr, "[NVMPI] encoder created OK, dmabuf_ext=%d, num_out_bufs=%d\n",
-	        ctx->dmabuf_external, ctx->enc->output_plane.getNumBuffers());
 	return ctx;
 }
 
@@ -568,7 +562,6 @@ int copyFrameToNvBuf(nvFrame* frame, NvBuffer& buffer)
 
 int nvmpi_encoder_put_frame(nvmpictx* ctx,nvFrame* frame)
 {
-	fprintf(stderr, "[NVMPI] put_frame CPU path, dmabuf_ext=%d\n", ctx->dmabuf_external);
 	if(ctx->flushing) return -2;
 	
 	int ret;
@@ -671,7 +664,6 @@ int nvmpi_encoder_put_frame(nvmpictx* ctx,nvFrame* frame)
 int nvmpi_encoder_put_frame_fd(nvmpictx* ctx, int dmabuf_fd,
 	int width, int height, int pitch, int64_t timestamp)
 {
-	fprintf(stderr, "[NVMPI] put_frame_fd DMABUF path, fd=%d, %dx%d pitch=%d\n", dmabuf_fd, width, height, pitch);
 	if (ctx->flushing) return -2;
 	if (!ctx->dmabuf_external) return -3;
 
