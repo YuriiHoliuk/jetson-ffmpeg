@@ -24,7 +24,8 @@ typedef struct nvmpictx nvmpictx;
 
 typedef enum {
     NV_PIX_NV12,
-    NV_PIX_YUV420
+    NV_PIX_YUV420,
+    NV_PIX_P010       /* 10-bit 4:2:0, 16-bit per component (P010LE) */
 } nvPixFormat;
 
 typedef enum {
@@ -105,6 +106,7 @@ typedef int       (*pf_nvmpi_decoder_get_frame_fd)(nvmpictx *ctx, int *dmabuf_fd
                     int *width, int *height, int *pitch, int64_t *timestamp,
                     nvmpi_frame_release_cb *release, void **opaque);
 typedef int       (*pf_nvmpi_decoder_close)(nvmpictx *ctx);
+typedef int       (*pf_nvmpi_decoder_get_bit_depth)(nvmpictx *ctx);
 typedef nvmpictx *(*pf_nvmpi_create_encoder)(nvEncParam *param);
 typedef int       (*pf_nvmpi_encoder_put_frame)(nvmpictx *ctx, nvFrame *frame);
 typedef int       (*pf_nvmpi_encoder_put_frame_fd)(nvmpictx *ctx, int dmabuf_fd,
@@ -121,6 +123,7 @@ static pf_nvmpi_decoder_put_packet    nvmpi_decoder_put_packet;
 static pf_nvmpi_decoder_get_frame     nvmpi_decoder_get_frame;
 static pf_nvmpi_decoder_get_frame_fd  nvmpi_decoder_get_frame_fd;
 static pf_nvmpi_decoder_close         nvmpi_decoder_close;
+static pf_nvmpi_decoder_get_bit_depth nvmpi_decoder_get_bit_depth;
 static pf_nvmpi_create_encoder        nvmpi_create_encoder;
 static pf_nvmpi_encoder_put_frame     nvmpi_encoder_put_frame;
 static pf_nvmpi_encoder_put_frame_fd  nvmpi_encoder_put_frame_fd;
@@ -158,6 +161,7 @@ static int nvmpi_dynlink_load(void)
     LOAD_SYM(decoder_get_frame);
     LOAD_SYM(decoder_get_frame_fd);
     LOAD_SYM(decoder_close);
+    LOAD_SYM(decoder_get_bit_depth);
     LOAD_SYM(create_encoder);
     LOAD_SYM(encoder_put_frame);
     LOAD_SYM(encoder_put_frame_fd);

@@ -10,7 +10,8 @@ typedef struct nvmpictx nvmpictx;
 
 typedef enum {
 	NV_PIX_NV12,
-	NV_PIX_YUV420
+	NV_PIX_YUV420,
+	NV_PIX_P010       /* 10-bit 4:2:0, 16-bit per component (P010LE) */
 }nvPixFormat;
 
 typedef enum {
@@ -102,6 +103,10 @@ extern "C" {
 		nvmpi_frame_release_cb *release, void **opaque);
 
 	int nvmpi_decoder_close(nvmpictx* ctx);
+
+	/* Query detected bit depth of decoded content (8 or 10).
+	   Only valid after at least one frame has been decoded. */
+	int nvmpi_decoder_get_bit_depth(nvmpictx* ctx);
 
 	nvmpictx* nvmpi_create_encoder(nvEncParam* param);
 	//add frame to encoder

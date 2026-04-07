@@ -47,6 +47,7 @@ struct nvmpictx
 	NvBufferRect src_rect, dest_rect;
 	
 	nvPixFormat out_pixfmt;
+	bool is_10bit{false};  /* Auto-detected from V4L2 capture format */
 	unsigned int decoder_pixfmt{0};
 	std::thread dec_capture_loop;
 	
@@ -73,51 +74,50 @@ struct nvmpictx
 	void deinitDecoderCapturePlane();
 };
 
-NvBufferColorFormat getNvColorFormatFromV4l2Format(v4l2_format &format)
+NvBufferColorFormat getNvColorFormatFromV4l2Format(v4l2_format &format, nvmpictx* ctx)
 {
-	NvBufferColorFormat ret_cf = NvBufferColorFormat_NV12; 
+	/* Detect 10-bit from V4L2 capture pixel format */
+	bool want_10bit = false;
+	if (ctx && ctx->out_pixfmt == NV_PIX_P010) {
+		want_10bit = true;
+	}
+
+	NvBufferColorFormat ret_cf = NvBufferColorFormat_NV12;
 	switch (format.fmt.pix_mp.colorspace)
 	{
 		case V4L2_COLORSPACE_SMPTE170M:
 			if (format.fmt.pix_mp.quantization == V4L2_QUANTIZATION_DEFAULT)
 			{
-				// "Decoder colorspace ITU-R BT.601 with standard range luma (16-235)"
-				ret_cf = NvBufferColorFormat_NV12;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE : NvBufferColorFormat_NV12;
 			}
 			else
 			{
-				//"Decoder colorspace ITU-R BT.601 with extended range luma (0-255)";
-				ret_cf = NvBufferColorFormat_NV12_ER;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE_ER : NvBufferColorFormat_NV12_ER;
 			}
 			break;
 		case V4L2_COLORSPACE_REC709:
 			if (format.fmt.pix_mp.quantization == V4L2_QUANTIZATION_DEFAULT)
 			{
-				//"Decoder colorspace ITU-R BT.709 with standard range luma (16-235)";
-				ret_cf = NvBufferColorFormat_NV12_709;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE_709 : NvBufferColorFormat_NV12_709;
 			}
 			else
 			{
-				//"Decoder colorspace ITU-R BT.709 with extended range luma (0-255)";
-				ret_cf = NvBufferColorFormat_NV12_709_ER;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE_709_ER : NvBufferColorFormat_NV12_709_ER;
 			}
 			break;
 		case V4L2_COLORSPACE_BT2020:
 			{
-				//"Decoder colorspace ITU-R BT.2020";
-				ret_cf = NvBufferColorFormat_NV12_2020;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE_2020 : NvBufferColorFormat_NV12_2020;
 			}
 			break;
 		default:
 			if (format.fmt.pix_mp.quantization == V4L2_QUANTIZATION_DEFAULT)
 			{
-				//"Decoder colorspace ITU-R BT.601 with standard range luma (16-235)";
-				ret_cf = NvBufferColorFormat_NV12;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE : NvBufferColorFormat_NV12;
 			}
 			else
 			{
-				//"Decoder colorspace ITU-R BT.601 with extended range luma (0-255)";
-				ret_cf = NvBufferColorFormat_NV12_ER;
+				ret_cf = want_10bit ? NvBufferColorFormat_NV12_10LE_ER : NvBufferColorFormat_NV12_ER;
 			}
 			break;
 	}
@@ -141,7 +141,7 @@ void nvmpictx::initDecoderCapturePlane(v4l2_format &format)
 	/* Request (min + extra) buffers, export and map buffers. */
 	numberCaptureBuffers = minimumDecoderCaptureBuffers + 5;
 
-	cParams.colorFormat = getNvColorFormatFromV4l2Format(format);
+	cParams.colorFormat = getNvColorFormatFromV4l2Format(format, this);
 	cParams.width = coded_width;
 	cParams.height = coded_height;
 	cParams.layout = NvBufferLayout_BlockLinear;
@@ -246,6 +246,24 @@ void nvmpictx::updateFrameSizeParams()
 		{
 			frame_linedatasize[i] = parm.width[i] * 2;
 		}
+		else if(i == 1 && (parm.pixel_format == NvBufferColorFormat_NV12_10LE ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_ER ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_709 ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_709_ER ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_2020))
+		{
+			/* 10-bit NV12: UV plane is interleaved U16+V16, half width → width * 4 bytes */
+			frame_linedatasize[i] = parm.width[i] * 4;
+		}
+		else if(i == 0 && (parm.pixel_format == NvBufferColorFormat_NV12_10LE ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_ER ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_709 ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_709_ER ||
+				parm.pixel_format == NvBufferColorFormat_NV12_10LE_2020))
+		{
+			/* 10-bit NV12: Y plane is 2 bytes per sample */
+			frame_linedatasize[i] = parm.width[i] * 2;
+		}
 		else
 		{
 			frame_linedatasize[i] = parm.width[i];
@@ -304,7 +322,13 @@ void nvmpictx::deinitFramePool()
 void nvmpictx::initFramePool()
 {
 	//if(bufNumber <= 0) return false; //TODO log msg //TODO check if it's already allocated and deinit first
-	NvBufferColorFormat cFmt = out_pixfmt==NV_PIX_NV12?NvBufferColorFormat_NV12: NvBufferColorFormat_YUV420;
+	NvBufferColorFormat cFmt;
+	if (out_pixfmt == NV_PIX_P010)
+		cFmt = NvBufferColorFormat_NV12_10LE;
+	else if (out_pixfmt == NV_PIX_NV12)
+		cFmt = NvBufferColorFormat_NV12;
+	else
+		cFmt = NvBufferColorFormat_YUV420;
 	
 	NvBufferCreateParams input_params;
 	memset(&input_params, 0, sizeof(input_params));
@@ -338,13 +362,20 @@ void respondToResolutionEvent(v4l2_format &format, v4l2_crop &crop,nvmpictx* ctx
     /* Get capture plane format from the decoder.
        This may change after resolution change event.
        Refer ioctl VIDIOC_G_FMT */
-	ret = ctx->dec->capture_plane.getFormat(format);	
+	ret = ctx->dec->capture_plane.getFormat(format);
 	TEST_ERROR(ret < 0, "Error: Could not get format from decoder capture plane", ret);
 
     /* Get the display resolution from the decoder.
        Refer ioctl VIDIOC_G_CROP */
 	ret = ctx->dec->capture_plane.getCrop(crop);
 	TEST_ERROR(ret < 0, "Error: Could not get crop from decoder capture plane", ret);
+
+	/* Auto-detect 10-bit from V4L2 capture pixel format.
+	   If the caller requested P010 output and the decoder reports a 10-bit
+	   capture format, enable 10-bit processing. */
+	if (ctx->out_pixfmt == NV_PIX_P010) {
+		ctx->is_10bit = true;
+	}
 
 	ctx->coded_width = crop.c.width;
 	ctx->coded_height = crop.c.height;
@@ -778,17 +809,22 @@ int nvmpi_decoder_close(nvmpictx* ctx)
 	{
 		ctx->dec_capture_loop.join();
 	}
-	
+
 	//deinit DstDmaBuffer and DecoderCapturePlane
 	ctx->deinitDecoderCapturePlane();
 	//empty frame queue and free buffers
 	ctx->deinitFramePool();
-	
+
 	delete ctx->dec; ctx->dec = nullptr;
 
 	delete ctx;
 
 	return 0;
+}
+
+int nvmpi_decoder_get_bit_depth(nvmpictx* ctx)
+{
+	return ctx->is_10bit ? 10 : 8;
 }
 
 
