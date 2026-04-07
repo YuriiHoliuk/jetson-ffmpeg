@@ -35,6 +35,7 @@ typedef struct {
 	char *resize_expr;
 	int frame_pool_size;
 	int drm_prime;  /* 1 = output DRM_PRIME frames (zero-copy) */
+	int p010;       /* 1 = request P010 (10-bit) frame pool from nvmpi */
 	int is_10bit;   /* Set after first frame: decoder detected 10-bit content */
 
 	/* DRM hardware context for DRM_PRIME mode */
@@ -92,23 +93,23 @@ static int nvmpi_init_decoder(AVCodecContext *avctx)
 
 	//Workaround for default pix_fmt not being set, so check if it isnt set and set it,
 	//or if it is set, but isnt set to something we can work with.
-	if(avctx->pix_fmt == AV_PIX_FMT_NONE)
+	if(avctx->pix_fmt ==AV_PIX_FMT_NONE)
 	{
 		 avctx->pix_fmt=AV_PIX_FMT_YUV420P;
 	}
-	else if(avctx->pix_fmt != AV_PIX_FMT_YUV420P &&
-	        avctx->pix_fmt != AV_PIX_FMT_YUVJ420P &&
-	        avctx->pix_fmt != AV_PIX_FMT_P010LE &&
-	        avctx->pix_fmt != AV_PIX_FMT_DRM_PRIME)
+	else if((avctx->pix_fmt != AV_PIX_FMT_YUV420P) && (avctx->pix_fmt != AV_PIX_FMT_YUVJ420P))
 	{
-		av_log(avctx, AV_LOG_ERROR, "Invalid Pix_FMT for NVMPI: Only YUV420P, YUVJ420P, P010LE, and DRM_PRIME are supported\n");
+		av_log(avctx, AV_LOG_ERROR, "Invalid Pix_FMT for NVMPI: Only YUV420P and YUVJ420P are supported\n");
 		return AVERROR_INVALIDDATA;
 	}
 
-	if (avctx->pix_fmt == AV_PIX_FMT_P010LE)
+	/* P010 option: request 10-bit frame pool from nvmpi */
+	if (nvmpi_context->p010) {
 		param.pixFormat = NV_PIX_P010;
-	else
+		nvmpi_context->is_10bit = 1;
+	} else {
 		param.pixFormat = NV_PIX_YUV420;
+	}
 
     if (nvmpi_context->resize_expr && sscanf(nvmpi_context->resize_expr, "%dx%d",
                                              &param.resized.width, &param.resized.height) != 2)
@@ -130,21 +131,11 @@ static int nvmpi_init_decoder(AVCodecContext *avctx)
 		return AVERROR_EXTERNAL;
 	}
 
-	/* If P010 was requested (via -pix_fmt p010le), tell nvmpi to use P010 frame pools */
-	if (avctx->pix_fmt == AV_PIX_FMT_P010LE || param.pixFormat == NV_PIX_P010) {
-		param.pixFormat = NV_PIX_P010;
-		nvmpi_context->is_10bit = 1;
-	}
-
 	if (nvmpi_context->drm_prime) {
 		/* DRM_PRIME mode: set up hardware contexts, no CPU buffer needed */
 		AVHWDeviceContext *device_ctx;
 		AVDRMDeviceContext *drm_ctx;
 		int ret;
-
-		/* If caller requested P010, use P010 frame pools in nvmpi */
-		if (nvmpi_context->is_10bit)
-			param.pixFormat = NV_PIX_P010;
 
 		nvmpi_context->device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_DRM);
 		if (!nvmpi_context->device_ref)
@@ -378,6 +369,7 @@ static const AVOption options[] = {
     { "resize",   "Resize (width)x(height)", OFFSET(resize_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD, "resize" },
     { "frame_pool_size", "Number of frames that could be buffered in the decoder before user must read it with avcodec_receive_frame()", OFFSET(frame_pool_size), AV_OPT_TYPE_INT, {.i64 = OPT_frame_pool_size_DEFAULT }, OPT_frame_pool_size_MIN, OPT_frame_pool_size_MAX, VD, "frame_pool_size" },
     { "drm_prime", "Output DRM_PRIME (DMA-BUF) frames for zero-copy pipeline", OFFSET(drm_prime), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VD },
+    { "p010", "Use P010 (10-bit) frame pool for 10-bit content", OFFSET(p010), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VD },
     { NULL }
 };
 
@@ -402,7 +394,7 @@ static const AVOption options[] = {
 			FF_CODEC_DECODE_CB(nvmpi_decode), \
 			.p.priv_class     = &nvmpi_##NAME##_dec_class, \
 			.p.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
-			.p.pix_fmts	=(const enum AVPixelFormat[]){AV_PIX_FMT_DRM_PRIME,AV_PIX_FMT_P010LE,AV_PIX_FMT_YUV420P,AV_PIX_FMT_NV12,AV_PIX_FMT_NONE},\
+			.p.pix_fmts	=(const enum AVPixelFormat[]){AV_PIX_FMT_DRM_PRIME,AV_PIX_FMT_YUV420P,AV_PIX_FMT_NV12,AV_PIX_FMT_NONE},\
 			.bsfs           = BSFS, \
 			.p.wrapper_name   = "nvmpi", \
 		};
@@ -420,7 +412,7 @@ static const AVOption options[] = {
 			.decode         = nvmpi_decode, \
 			.priv_class     = &nvmpi_##NAME##_dec_class, \
 			.capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING | AV_CODEC_CAP_HARDWARE, \
-			.pix_fmts	=(const enum AVPixelFormat[]){AV_PIX_FMT_DRM_PRIME,AV_PIX_FMT_P010LE,AV_PIX_FMT_YUV420P,AV_PIX_FMT_NV12,AV_PIX_FMT_NONE},\
+			.pix_fmts	=(const enum AVPixelFormat[]){AV_PIX_FMT_DRM_PRIME,AV_PIX_FMT_YUV420P,AV_PIX_FMT_NV12,AV_PIX_FMT_NONE},\
 			.bsfs           = BSFS, \
 			.wrapper_name   = "nvmpi", \
 		};
