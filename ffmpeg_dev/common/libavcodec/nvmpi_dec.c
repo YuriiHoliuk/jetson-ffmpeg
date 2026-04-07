@@ -91,24 +91,22 @@ static int nvmpi_init_decoder(AVCodecContext *avctx)
 		param.frame_pool_size = OPT_frame_pool_size_DEFAULT;
 	}
 
-	//Workaround for default pix_fmt not being set, so check if it isnt set and set it,
-	//or if it is set, but isnt set to something we can work with.
-	if(avctx->pix_fmt ==AV_PIX_FMT_NONE)
-	{
-		 avctx->pix_fmt=AV_PIX_FMT_YUV420P;
-	}
-	else if((avctx->pix_fmt != AV_PIX_FMT_YUV420P) && (avctx->pix_fmt != AV_PIX_FMT_YUVJ420P))
-	{
-		av_log(avctx, AV_LOG_ERROR, "Invalid Pix_FMT for NVMPI: Only YUV420P and YUVJ420P are supported\n");
-		return AVERROR_INVALIDDATA;
-	}
-
 	/* P010 option: request 10-bit frame pool from nvmpi */
 	if (nvmpi_context->p010) {
 		param.pixFormat = NV_PIX_P010;
 		nvmpi_context->is_10bit = 1;
+		avctx->pix_fmt = AV_PIX_FMT_P010LE;
 	} else {
 		param.pixFormat = NV_PIX_YUV420;
+		/* Default pix_fmt workaround */
+		if (avctx->pix_fmt == AV_PIX_FMT_NONE)
+			avctx->pix_fmt = AV_PIX_FMT_YUV420P;
+		else if (avctx->pix_fmt != AV_PIX_FMT_YUV420P &&
+		         avctx->pix_fmt != AV_PIX_FMT_YUVJ420P) {
+			/* Non-P010 mode only supports 8-bit formats */
+			av_log(avctx, AV_LOG_WARNING, "Unsupported pix_fmt for NVMPI, defaulting to YUV420P\n");
+			avctx->pix_fmt = AV_PIX_FMT_YUV420P;
+		}
 	}
 
     if (nvmpi_context->resize_expr && sscanf(nvmpi_context->resize_expr, "%dx%d",
